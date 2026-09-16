@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+ 
+# Virtual environments
+.venv/
+venv/
+env/
+ 
+# Whisper / faster-whisper model cache (if ever downloaded into the repo dir)
+models/
+*.bin
+*.pt
+ 
+# Generated output
+transcript.txt
+*.transcript.txt
+ 
+# OS / editor cruft
+.DS_Store
+.idea/
+.vscode/
+ 
