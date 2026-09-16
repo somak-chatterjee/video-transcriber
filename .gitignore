@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 venv/
 env/
+.trans_venv/
  
 # Whisper / faster-whisper model cache (if ever downloaded into the repo dir)
 models/
