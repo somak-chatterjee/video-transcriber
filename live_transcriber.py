@@ -100,6 +100,32 @@ def format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
 
 
+def summarize_with_ollama(
+    text: str, model: str, host: str, timeout: float = 180.0
+) -> str:
+    """Send transcribed text to a local Ollama server for summarization."""
+    import requests
+
+    prompt = (
+        "The following is a raw speech-to-text transcript of spoken audio. It may "
+        "contain minor transcription errors, filler words, or occasional stray "
+        "words. Write a clear, concise summary of what was said, capturing the "
+        "key points and overall message. Do not mention that this is a transcript.\n\n"
+        f"Transcript:\n{text}\n\nSummary:"
+    )
+    response = requests.post(
+        f"{host.rstrip('/')}/api/generate",
+        json={"model": model, "prompt": prompt, "stream": False},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    data = response.json()
+    summary = data.get("response", "").strip()
+    if not summary:
+        raise RuntimeError(f"Ollama returned an empty response: {data}")
+    return summary
+
+
 class ReconnectingStreamReader:
     """Read stream audio and reconnect after interruptions."""
 
@@ -215,6 +241,16 @@ def main():
         type=float,
         default=15.0,
     )
+    parser.add_argument(
+        "--no-summarize",
+        dest="summarize",
+        action="store_false",
+        default=True,
+        help="Disable generating a summary at the end (requires Ollama).",
+    )
+    parser.add_argument("--summary-output", default="summary.txt")
+    parser.add_argument("--ollama-model", default="llama3.2")
+    parser.add_argument("--ollama-host", default="http://localhost:11434")
     args = parser.parse_args()
 
     from faster_whisper import WhisperModel
@@ -245,6 +281,7 @@ def main():
     loop_detected = False
     last_written_end = 0.0
     epsilon = 0.05
+    session_lines = []
 
     try:
         with out_path.open("a", encoding="utf-8") as output:
@@ -343,6 +380,7 @@ def main():
                     output.write(line + "\n")
                     output.flush()
                     last_written_end = max(last_written_end, segment_end)
+                    session_lines.append(text)
 
                 if loop_detected:
                     break
@@ -358,6 +396,22 @@ def main():
         print("\nStopped by user.")
     finally:
         reader.close()
+
+    if args.summarize:
+        full_text = " ".join(session_lines).strip()
+        if len(full_text) < 50:
+            print("\nNot enough transcribed content to generate a summary; skipping.")
+        else:
+            print(f"\nGenerating summary via Ollama (model: {args.ollama_model})...")
+            try:
+                summary = summarize_with_ollama(
+                    full_text, args.ollama_model, args.ollama_host
+                )
+                summary_path = Path(args.summary_output)
+                summary_path.write_text(summary + "\n", encoding="utf-8")
+                print(f"Summary written to: {summary_path.resolve()}\n{summary}")
+            except Exception as exc:
+                print(f"\nFailed to generate summary via Ollama: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":
