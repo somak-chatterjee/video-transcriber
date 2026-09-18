@@ -199,25 +199,19 @@ everything captured up to that point.
 slightly overlapping timestamps in the output, try increasing
 `--overlap-seconds` (e.g. to 2) for more cross-chunk context, at the cost
 of a small amount of extra compute per chunk.
-- **Looping "live" streams**: if you know the exact length of the source
 video, `--stop-after-seconds <N>` is the most reliable way to cut things
 off precisely. Loop detection (on by default) is a good fallback when you
 don't know the length ahead of time, but if the video's opening line is
-short or generic, consider lowering `--loop-similarity` slightly, or pass
 `--no-loop-detect` and rely on `--stop-after-seconds` instead.
 # Live Stream Transcriber
-
 Transcribes a live video stream (YouTube Live, Twitch, or anything
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) supports) in near-real-time and
-writes timestamped captions to a plain text file as it goes.
 
 ## How it works
 
-1. **yt-dlp** resolves the live page URL into a direct, playable stream URL.
 2. **ffmpeg** reads that stream and decodes it to raw 16kHz mono PCM audio.
 3. Audio is buffered into fixed-length chunks (8 seconds by default).
 4. Each chunk is transcribed locally using **faster-whisper** (a fast
-   reimplementation of OpenAI's Whisper model).
 5. Each resulting caption is appended to the output file in the format:
 
    ```
