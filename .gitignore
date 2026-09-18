@@ -16,6 +16,8 @@ models/
 # Generated output
 transcript.txt
 *.transcript.txt
+summary.txt
+*.summary.txt
  
 # OS / editor cruft
 .DS_Store
