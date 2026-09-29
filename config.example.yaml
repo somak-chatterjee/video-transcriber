@@ -1,0 +1,40 @@
+# Example config for live_transcriber.py
+#
+# Copy this file to `config.yaml` (in this directory) and edit the values
+# you want to change. The script auto-loads `config.yaml` if it's present -
+# no --config flag needed. You can also point at a differently-named file
+# with `--config path/to/file.yaml`.
+#
+# Any flag passed on the command line always overrides the value here, so
+# you can still do one-off overrides without editing this file, e.g.:
+#   python live_transcriber.py "URL" --model medium
+#
+# Every key below is optional - omit anything you're happy leaving at its
+# built-in default. Keys not recognized by the script print a warning and
+# are otherwise ignored (typo protection).
+
+# --- Whisper transcription ---
+model: small              # tiny | base | small | medium | large-v3
+device: cpu                # cpu | cuda
+language: null              # e.g. "en" - null/omit to auto-detect
+chunk_seconds: 8
+overlap_seconds: 1
+
+# --- Output ---
+output: transcript.txt
+
+# --- Stream reconnection ---
+max_retries: 5
+retry_delay: 5
+
+# --- Stopping conditions ---
+stop_after_seconds: null    # e.g. 300 to hard-stop after 5 minutes
+loop_detect: true
+loop_similarity: 0.85
+loop_grace_seconds: 15
+
+# --- Summarization (Ollama) ---
+summarize: true
+summary_output: summary.txt
+ollama_model: llama3.2:1b   # match whatever tag you've actually pulled
+ollama_host: http://localhost:11434

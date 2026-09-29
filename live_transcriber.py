@@ -41,6 +41,7 @@ pulled (ollama pull llama3.2) for the summarization step; pass
 import argparse
 import datetime as dt
 import difflib
+import os
 import re
 import subprocess
 import sys
@@ -140,6 +141,35 @@ def loop_match_ratio(a: str, b: str) -> float:
     return match.size / shorter if shorter else 0.0
 
 
+def configure_cuda_library_path() -> list:
+    """
+    Pip-installed CUDA packages (nvidia-cublas-cu12, nvidia-cudnn-cu12) drop
+    their shared libraries into site-packages, but unlike a full CUDA
+    Toolkit install, pip doesn't register that location on the system
+    library search path. faster-whisper's GPU backend (ctranslate2) looks
+    for libcublas/libcudnn via the standard dynamic linker search, so
+    without this, --device cuda fails with "Library libcublas.so.12 is not
+    found" even though the library is sitting right there in the venv.
+
+    This locates those packages (if installed) and prepends their
+    directories to LD_LIBRARY_PATH before faster-whisper is imported, so
+    CUDA mode works out of the box without any manual environment setup.
+    Returns the list of directories added, or [] if the packages aren't
+    installed (e.g. CPU-only setups, or a system-wide CUDA Toolkit is
+    already correctly configured).
+    """
+    try:
+        import nvidia.cublas.lib as cublas_lib
+        import nvidia.cudnn.lib as cudnn_lib
+    except ImportError:
+        return []
+
+    lib_dirs = sorted({os.path.dirname(cublas_lib.__file__), os.path.dirname(cudnn_lib.__file__)})
+    existing = os.environ.get("LD_LIBRARY_PATH", "")
+    os.environ["LD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+    return lib_dirs
+
+
 def format_timestamp(seconds: float) -> str:
     td = dt.timedelta(seconds=max(0, seconds))
     total_ms = int(td.total_seconds() * 1000)
@@ -202,17 +232,24 @@ def build_summary_prompt(text: str, metadata: dict = None) -> str:
         instructions = (
             "Using the above, write a two-part summary with these exact headings:\n\n"
             "## Context\n"
-            "In 1-3 sentences, describe what this video is / what it's about, "
-            "based on the title, uploader, description, and tags above. This is "
-            "background, not a summary of the transcript.\n\n"
+            "Describe what this video actually shows: the scene, setting, and story "
+            "context implied by the title, uploader, description, and tags above - "
+            "and, if you recognize the specific movie, show, or event being "
+            "referenced, draw on what you actually know about it to describe the "
+            "scene and its place in the larger story. Focus on painting a picture "
+            "of what's happening on screen, not on restating the metadata fields "
+            "themselves. If you don't recognize the source material, describe what "
+            "can reasonably be inferred from the available information instead of "
+            "presenting guesses as certain fact.\n\n"
             "## What Was Said\n"
-            "Summarize the actual spoken content from the transcript below, in "
-            "your own words, as a short paragraph or a few bullet points. Focus "
-            "on the key points and overall message of what the speaker says. Use "
-            "the Context section only to understand names, references, and "
-            "subject matter, correcting for likely transcription errors - do not "
-            "just restate the description here, and do not invent content that "
-            "isn't actually in the transcript.\n\n"
+            "Describe what the speaker actually says in the transcript below, "
+            "elaborating using the scene and story context above as backdrop - "
+            "connect specific lines or themes in the narration to what's happening "
+            "in the scene where relevant, and correct for likely transcription "
+            "errors using that context as a guide. Write this as a flowing "
+            "description in your own words, not a bare paraphrase or a repeat of "
+            "the Context section. Do not invent narration content that isn't "
+            "actually in the transcript below.\n\n"
             "Do not mention that this is a transcript or that it came from "
             "speech-to-text."
         )
@@ -330,28 +367,109 @@ class ReconnectingStreamReader:
         self._terminate_current()
 
 
+DEFAULTS = {
+    "output": "transcript.txt",
+    "model": "small",
+    "chunk_seconds": 8.0,
+    "overlap_seconds": 1.0,
+    "language": None,
+    "device": "cpu",
+    "max_retries": 5,
+    "retry_delay": 5.0,
+    "stop_after_seconds": None,
+    "loop_detect": True,
+    "loop_similarity": 0.85,
+    "loop_grace_seconds": 15.0,
+    "summarize": True,
+    "summary_output": "summary.txt",
+    "ollama_model": "llama3.2",
+    "ollama_host": "http://localhost:11434",
+}
+
+
+def find_default_config_path() -> Path:
+    """Look for a config.yaml next to this script or in the current directory."""
+    for candidate in (Path.cwd() / "config.yaml", Path(__file__).resolve().parent / "config.yaml"):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_config_file(path: Path) -> dict:
+    import yaml
+
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return data or {}
+
+
+def apply_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """
+    Fill in any option the user didn't pass on the command line, first from
+    a config file (if one is given or found), then from DEFAULTS. Options
+    explicitly passed on the CLI are never overridden - they win outright.
+    """
+    config_path = Path(args.config) if args.config else find_default_config_path()
+    config_data = {}
+
+    if args.config and not config_path.exists():
+        print(f"Warning: config file not found: {config_path}", file=sys.stderr)
+    elif config_path:
+        config_data = load_config_file(config_path)
+        print(f"Loaded config from: {config_path}")
+        unknown_keys = set(config_data) - set(DEFAULTS)
+        if unknown_keys:
+            print(f"Warning: ignoring unknown config keys: {', '.join(sorted(unknown_keys))}", file=sys.stderr)
+
+    for key, default_value in DEFAULTS.items():
+        if getattr(args, key, None) is None:
+            resolved = config_data[key] if key in config_data else default_value
+            setattr(args, key, resolved)
+
+    return args
+
+
 def main():
     parser = argparse.ArgumentParser(description="Transcribe a live video stream to a timestamped text file.")
     parser.add_argument("url", help="Live stream URL (YouTube Live, Twitch, etc.)")
-    parser.add_argument("--output", default="transcript.txt", help="Output text file path")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to a YAML config file with default values for the other options below. "
+             "If omitted, looks for 'config.yaml' in the current directory or next to this script. "
+             "Any flag passed explicitly on the command line always overrides the config file.",
+    )
+    parser.add_argument("--output", default=None, help=f"Output text file path (default: {DEFAULTS['output']})")
     parser.add_argument(
         "--model",
-        default="small",
+        default=None,
         choices=["tiny", "base", "small", "medium", "large-v3"],
-        help="faster-whisper model size (bigger = more accurate, slower)",
+        help=f"faster-whisper model size (bigger = more accurate, slower) (default: {DEFAULTS['model']})",
     )
-    parser.add_argument("--chunk-seconds", type=float, default=8.0, help="Length of each new audio chunk")
+    parser.add_argument(
+        "--chunk-seconds", type=float, default=None,
+        help=f"Length of each new audio chunk (default: {DEFAULTS['chunk_seconds']})",
+    )
     parser.add_argument(
         "--overlap-seconds",
         type=float,
-        default=1.0,
+        default=None,
         help="Seconds of audio from the end of the previous chunk to re-include as context "
-             "for the next chunk, to reduce words being cut at chunk boundaries",
+             f"for the next chunk, to reduce words being cut at chunk boundaries (default: {DEFAULTS['overlap_seconds']})",
     )
     parser.add_argument("--language", default=None, help="Force a language code (e.g. 'en'); default: auto-detect")
-    parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"], help="Inference device")
-    parser.add_argument("--max-retries", type=int, default=5, help="Max consecutive reconnect attempts per stall")
-    parser.add_argument("--retry-delay", type=float, default=5.0, help="Seconds to wait between reconnect attempts")
+    parser.add_argument(
+        "--device", default=None, choices=["cpu", "cuda"],
+        help=f"Inference device (default: {DEFAULTS['device']})",
+    )
+    parser.add_argument(
+        "--max-retries", type=int, default=None,
+        help=f"Max consecutive reconnect attempts per stall (default: {DEFAULTS['max_retries']})",
+    )
+    parser.add_argument(
+        "--retry-delay", type=float, default=None,
+        help=f"Seconds to wait between reconnect attempts (default: {DEFAULTS['retry_delay']})",
+    )
     parser.add_argument(
         "--stop-after-seconds",
         type=float,
@@ -363,44 +481,58 @@ def main():
         "--no-loop-detect",
         dest="loop_detect",
         action="store_false",
-        default=True,
+        default=None,
         help="Disable automatic detection of looping/repeating streams (some 'live' streams "
              "are really a short VOD replayed on a loop). Enabled by default.",
     )
     parser.add_argument(
         "--loop-similarity",
         type=float,
-        default=0.85,
+        default=None,
         help="Similarity ratio (0-1) a later caption must have to the very first caption "
-             "to be considered the stream looping back to the start",
+             f"to be considered the stream looping back to the start (default: {DEFAULTS['loop_similarity']})",
     )
     parser.add_argument(
         "--loop-grace-seconds",
         type=float,
-        default=15.0,
+        default=None,
         help="Don't start checking for loop repeats until this many seconds of audio "
-             "have been transcribed, so the opening lines aren't matched against themselves",
+             f"have been transcribed (default: {DEFAULTS['loop_grace_seconds']})",
     )
     parser.add_argument(
         "--no-summarize",
         dest="summarize",
         action="store_false",
-        default=True,
+        default=None,
         help="Disable generating a summary of the transcript at the end of the run "
              "(enabled by default; requires a local Ollama server)",
     )
-    parser.add_argument("--summary-output", default="summary.txt", help="Output path for the generated summary")
+    parser.add_argument(
+        "--summary-output", default=None,
+        help=f"Output path for the generated summary (default: {DEFAULTS['summary_output']})",
+    )
     parser.add_argument(
         "--ollama-model",
-        default="llama3.2",
-        help="Ollama model to use for summarization (must already be pulled, e.g. `ollama pull llama3.2`)",
+        default=None,
+        help=f"Ollama model to use for summarization (must already be pulled) (default: {DEFAULTS['ollama_model']})",
     )
     parser.add_argument(
         "--ollama-host",
-        default="http://localhost:11434",
-        help="Base URL of the Ollama server",
+        default=None,
+        help=f"Base URL of the Ollama server (default: {DEFAULTS['ollama_host']})",
     )
     args = parser.parse_args()
+    args = apply_config_defaults(args)
+
+    if args.device == "cuda":
+        cuda_lib_dirs = configure_cuda_library_path()
+        if cuda_lib_dirs:
+            print(f"Configured CUDA library path from pip packages: {':'.join(cuda_lib_dirs)}")
+        else:
+            print(
+                "Note: nvidia-cublas-cu12 / nvidia-cudnn-cu12 not found via pip; "
+                "relying on a system-wide CUDA installation instead."
+            )
 
     from faster_whisper import WhisperModel
 

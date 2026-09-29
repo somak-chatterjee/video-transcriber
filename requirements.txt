@@ -2,4 +2,9 @@ yt-dlp>=2024.1.0
 faster-whisper>=1.0.0
 numpy>=1.24.0
 requests>=2.31.0
- 
+pyyaml>=6.0
+
+# Only used when --device cuda / device: cuda is selected. Provides the
+# CUDA libraries faster-whisper's GPU backend needs (libcublas, libcudnn)
+# without requiring a full system-wide CUDA Toolkit install. 
+nvidia-cudnn-cu12

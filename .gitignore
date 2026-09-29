@@ -1,26 +1,28 @@
 # Python
 __pycache__/
 *.pyc
- 
+
 # Virtual environments
 .venv/
 venv/
 env/
 .trans_venv/
- 
+
 # Whisper / faster-whisper model cache (if ever downloaded into the repo dir)
 models/
 *.bin
 *.pt
- 
+
 # Generated output
 transcript.txt
 *.transcript.txt
 summary.txt
 *.summary.txt
- 
+
+# Local config (copy config.example.yaml to config.yaml and edit)
+config.yaml
+
 # OS / editor cruft
 .DS_Store
 .idea/
 .vscode/
- 
