@@ -4,7 +4,12 @@ numpy>=1.24.0
 requests>=2.31.0
 pyyaml>=6.0
 
-# Only used when --device cuda / device: cuda is selected. Provides the
-# CUDA libraries faster-whisper's GPU backend needs (libcublas, libcudnn)
-# without requiring a full system-wide CUDA Toolkit install. 
-nvidia-cudnn-cu12
+# Web dashboard (server.py)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+
+# GPU support (--device cuda) is optional and NOT installed by default -
+# see requirements-cuda.txt. Those packages are individually 700MB+ and
+# have been known to get OOM-killed on machines with limited RAM (~4GB or
+# less); keeping them out of the default install avoids that risk for
+# everyone who's just running on CPU, which is this project's default.

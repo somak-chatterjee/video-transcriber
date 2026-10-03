@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Transcriber</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #666666; --border: #dddddd;
+    --accent: #2563eb; --danger: #dc2626; --log-bg: #0d1117; --log-fg: #c9d1d9;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121212; --fg: #eaeaea; --muted: #999999; --border: #333333; --accent: #60a5fa; --danger: #f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); }
+  .container { max-width: 800px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .row { display: flex; gap: 8px; margin-bottom: 12px; }
+  input[type=text] {
+    flex: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--fg); font-size: 14px;
+  }
+  button {
+    padding: 10px 16px; border: none; border-radius: 6px; font-size: 14px;
+    cursor: pointer; font-weight: 500;
+  }
+  #startBtn { background: var(--accent); color: white; }
+  #stopBtn { background: var(--danger); color: white; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .status { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+  .status.running { color: var(--accent); }
+  .status.error { color: var(--danger); }
+  #log {
+    background: var(--log-bg); color: var(--log-fg); font-family: var(--mono);
+    font-size: 12.5px; line-height: 1.5; padding: 14px; border-radius: 8px;
+    height: 380px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  #summarySection { display: none; margin-top: 20px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }
+  #summarySection h2 { font-size: 16px; margin: 0 0 10px; }
+  #summaryText { white-space: pre-wrap; font-size: 14px; line-height: 1.6; }
+  #summaryText h2 { font-size: 15px; margin: 16px 0 6px; }
+  #summaryText h2:first-child { margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Live transcriber</h1>
+  <div class="subtitle">Runs live_transcriber.py locally and streams its output here.</div>
+
+  <div class="row">
+    <input type="text" id="urlInput" placeholder="Paste a stream URL (YouTube Live, Twitch, ...)">
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+  </div>
+
+  <div class="status" id="statusLine">Idle</div>
+  <div id="log"></div>
+
+  <div id="summarySection">
+    <h2>Summary</h2>
+    <div id="summaryText"></div>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

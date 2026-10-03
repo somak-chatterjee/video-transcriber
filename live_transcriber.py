@@ -179,13 +179,8 @@ def format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{ms:03d}"
 
 
-def build_summary_prompt(text: str, metadata: dict = None) -> str:
-    """
-    Build the summarization prompt, folding in video metadata (title,
-    description, uploader, etc.) as context when available so the model
-    can ground the summary in what the video is actually about, rather
-    than working from the transcript text alone.
-    """
+def extract_context_lines(metadata: dict = None) -> list:
+    """Turn a metadata dict into a list of plain-text context lines for a prompt."""
     metadata = metadata or {}
     context_lines = []
 
@@ -215,70 +210,81 @@ def build_summary_prompt(text: str, metadata: dict = None) -> str:
             trimmed = trimmed[:800].rsplit(" ", 1)[0] + "..."
         context_lines.append(f"Video description: {trimmed}")
 
-    context_block = ""
-    if context_lines:
-        context_block = (
-            "Here is some context about the video this transcript comes from:\n"
-            + "\n".join(context_lines) + "\n\n"
-        )
+    return context_lines
 
-    if context_lines:
-        # We have real metadata, so ask for a structured summary that keeps
-        # "what the video is" (from metadata) separate from "what was said"
-        # (from the transcript) - otherwise models tend to blend the two, or
-        # lean entirely on whichever source has punchier, easier language
-        # (usually the description) rather than actually engaging with the
-        # transcript content.
-        instructions = (
-            "Using the above, write a two-part summary with these exact headings:\n\n"
-            "## Context\n"
-            "Describe what this video actually shows: the scene, setting, and story "
-            "context implied by the title, uploader, description, and tags above - "
-            "and, if you recognize the specific movie, show, or event being "
-            "referenced, draw on what you actually know about it to describe the "
-            "scene and its place in the larger story. Focus on painting a picture "
-            "of what's happening on screen, not on restating the metadata fields "
-            "themselves. If you don't recognize the source material, describe what "
-            "can reasonably be inferred from the available information instead of "
-            "presenting guesses as certain fact.\n\n"
-            "## What Was Said\n"
-            "Describe what the speaker actually says in the transcript below, "
-            "elaborating using the scene and story context above as backdrop - "
-            "connect specific lines or themes in the narration to what's happening "
-            "in the scene where relevant, and correct for likely transcription "
-            "errors using that context as a guide. Write this as a flowing "
-            "description in your own words, not a bare paraphrase or a repeat of "
-            "the Context section. Do not invent narration content that isn't "
-            "actually in the transcript below.\n\n"
-            "Do not mention that this is a transcript or that it came from "
-            "speech-to-text."
-        )
-    else:
-        # No metadata available - fall back to a plain single-section summary.
-        instructions = (
-            "Write a clear, concise summary of what was said in the transcript "
-            "below, in your own words, capturing the key points and overall "
-            "message. Do not mention that this is a transcript or that it came "
-            "from speech-to-text."
-        )
+
+def build_scene_context_prompt(metadata: dict) -> str:
+    """
+    First call of the two-call summary: a narrow, single-purpose prompt
+    that only asks the model to describe the scene/setting/story implied
+    by the video's metadata. Kept deliberately simple - one job, one ask -
+    so a small model isn't juggling this alongside transcript-reading and
+    formatting rules at the same time.
+    """
+    context_lines = extract_context_lines(metadata)
+    context_block = "Here is some information about a video:\n" + "\n".join(context_lines)
 
     return (
-        f"{context_block}"
-        f"{instructions}\n\n"
+        f"{context_block}\n\n"
+        "Describe what this video actually shows: the scene, setting, and story "
+        "implied by the information above - and, if you recognize the specific "
+        "movie, show, or event being referenced, draw on what you actually know "
+        "about it to describe the scene and its place in the larger story. Focus "
+        "on painting a picture of what's happening on screen, not on restating "
+        "the fields above verbatim. If you don't recognize the source material, "
+        "describe only what can reasonably be inferred from the information given "
+        "instead of presenting guesses as certain fact. Write 2-4 sentences.\n\n"
+        "Description:"
+    )
+
+
+def build_narration_prompt(scene_context: str, text: str) -> str:
+    """
+    Second call of the two-call summary: given the scene description from
+    the first call, describe what's actually said in the transcript. Also
+    kept to one main job (describe the narration) plus one disambiguation
+    rule (actor vs. character), rather than bundling in formatting and
+    scene-description requirements as well.
+    """
+    return (
+        f"Here is a description of a video's scene:\n{scene_context}\n\n"
+        "Below is a speech-to-text transcript of the narration/dialogue spoken "
+        "in that video. It may contain minor transcription errors, filler words, "
+        "or the occasional stray or incorrect word.\n\n"
+        "Describe what the speaker actually says, in your own words, using the "
+        "scene description above as backdrop - connect specific lines or themes "
+        "to what's happening in the scene where relevant, and correct for likely "
+        "transcription errors using that context as a guide. Write this as a "
+        "flowing description, not a bare paraphrase.\n\n"
+        "If the scene description above describes an actor or narrator playing a "
+        "character, identify the speaker in the transcript as that character "
+        "(in-universe), not as the real actor addressing the character - an actor "
+        "playing a role is not having a conversation with that role. Use the "
+        "transcript's own pronouns to check this: first-person language (\"I\", "
+        "\"my\", addressing someone as \"mom\" or similar) means the speaker is "
+        "talking about their own life as that character, not narrating someone "
+        "else's.\n\n"
+        "Do not invent content that isn't actually in the transcript below. Do "
+        "not mention that this is a transcript or that it came from "
+        "speech-to-text.\n\n"
+        f"Transcript:\n{text}\n\nDescription:"
+    )
+
+
+def build_plain_summary_prompt(text: str) -> str:
+    """Fallback single-call prompt used when no video metadata is available at all."""
+    return (
+        "Write a clear, concise summary of what was said in the transcript "
+        "below, in your own words, capturing the key points and overall "
+        "message. Do not mention that this is a transcript or that it came "
+        "from speech-to-text.\n\n"
         f"Transcript:\n{text}\n\nSummary:"
     )
 
 
-def summarize_with_ollama(text: str, model: str, host: str, metadata: dict = None, timeout: float = 180.0) -> str:
-    """
-    Send transcribed text (plus optional video metadata as context) to a
-    local Ollama server for summarization. Requires Ollama to be installed
-    and running (`ollama serve`), with the requested model already pulled
-    (`ollama pull <model>`).
-    """
+def _ollama_generate(prompt: str, model: str, host: str, timeout: float) -> str:
+    """Send one prompt to Ollama's /api/generate and return the response text."""
     import requests
-
-    prompt = build_summary_prompt(text, metadata)
 
     response = requests.post(
         f"{host.rstrip('/')}/api/generate",
@@ -287,10 +293,37 @@ def summarize_with_ollama(text: str, model: str, host: str, metadata: dict = Non
     )
     response.raise_for_status()
     data = response.json()
-    summary = data.get("response", "").strip()
-    if not summary:
+    result = data.get("response", "").strip()
+    if not result:
         raise RuntimeError(f"Ollama returned an empty response: {data}")
-    return summary
+    return result
+
+
+def summarize_with_ollama(text: str, model: str, host: str, metadata: dict = None, timeout: float = 180.0) -> str:
+    """
+    Summarize transcribed text, optionally grounded in video metadata, via a
+    local Ollama server. Requires Ollama to be installed and running
+    (`ollama serve`), with the requested model already pulled.
+
+    When metadata is available, this makes two separate, narrower calls
+    instead of one call doing everything at once: first describing the
+    scene/context from the metadata alone, then describing the narration
+    using that scene description as backdrop. Splitting it this way asks
+    less of the model per call (one job instead of several at once -
+    format, scene description, narration, and a disambiguation rule all
+    together), which matters a lot for small local models that lose
+    reliability once a single prompt asks for too much simultaneously.
+    """
+    context_lines = extract_context_lines(metadata)
+
+    if not context_lines:
+        prompt = build_plain_summary_prompt(text)
+        return _ollama_generate(prompt, model, host, timeout)
+
+    scene_context = _ollama_generate(build_scene_context_prompt(metadata), model, host, timeout)
+    narration = _ollama_generate(build_narration_prompt(scene_context, text), model, host, timeout)
+
+    return f"## Context\n{scene_context}\n\n## What Was Said\n{narration}"
 
 
 class ReconnectingStreamReader:

@@ -79,6 +79,33 @@ Precedence, highest to lowest: **CLI flag > config file > built-in
 default**. Unrecognized keys in the config file print a warning (typo
 protection) rather than silently doing nothing.
 
+## Web dashboard
+
+`server.py` runs `live_transcriber.py` unchanged, as a subprocess, and
+gives you a local browser page instead of a terminal: paste a URL, watch
+the transcript scroll in live, and see the summary rendered with real
+headings once it's done.
+
+```bash
+pip install -r requirements.txt   # now includes fastapi + uvicorn
+python server.py
+```
+
+Then open **http://localhost:8000**.
+
+Notes:
+- Only one job runs at a time, same as the CLI. Starting a second job
+  while one's running is rejected until the first finishes or is stopped.
+- **Stop** sends the same signal as Ctrl+C in the terminal - the script
+  still finishes writing the summary for whatever was captured so far,
+  rather than just dying.
+- All the usual config still applies: `config.yaml` next to the script is
+  still picked up automatically, since the server just runs
+  `python live_transcriber.py <url>` under the hood with no extra flags.
+- The CLI itself (`python live_transcriber.py "URL"`) still works exactly
+  as before - the server is a separate, optional way to run it, not a
+  replacement.
+
 ## Summarization (Ollama)
 
 Summarization runs locally through [Ollama](https://ollama.com) — no API
