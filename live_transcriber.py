@@ -1,41 +1,7 @@
 #!/usr/bin/env python3
-"""
-live_transcriber.py
-
-Transcribes a live video stream (YouTube Live, Twitch, or any URL yt-dlp
-supports) in near-real-time and writes timestamped captions to a text file.
-
-How it works:
-  1. yt-dlp resolves the live page URL into a direct, playable stream URL.
-  2. ffmpeg reads that stream and outputs raw 16kHz mono PCM audio.
-  3. Audio is buffered in overlapping chunks (default 8s, 1s overlap) so
-     Whisper has a little context around chunk boundaries and doesn't cut
-     words mid-sentence.
-  4. Each chunk is transcribed locally with faster-whisper.
-  5. Each resulting caption is appended to the output .txt file with a
-     [HH:MM:SS.mmm --> HH:MM:SS.mmm] timestamp, and the file is flushed
-     immediately so it can be tailed live (`tail -f transcript.txt`).
-  6. If the stream connection drops (network hiccup, CDN URL rotation,
-     etc.), the script automatically re-resolves the URL and reconnects
-     ffmpeg, up to --max-retries times, before giving up.
-  7. Once transcription stops (loop detected, stream ended, or a manual
-     cutoff is reached), the full transcript is sent to a local Ollama
-     model, which writes a plain-language summary to summary.txt.
-
-Usage:
-  python live_transcriber.py "https://www.youtube.com/watch?v=XXXXXXXX" \
-      --output transcript.txt \
-      --model small \
-      --chunk-seconds 8 \
-      --overlap-seconds 1 \
-      --language en \
-      --ollama-model llama3.2
-
-Requirements: see requirements.txt (pip install -r requirements.txt)
-ffmpeg must also be installed and on PATH.
-Ollama must be installed and running (ollama serve) with the chosen model
-pulled (ollama pull llama3.2) for the summarization step; pass
---no-summarize to skip it.
+"""Transcribe a live video stream to a timestamped text file, then summarize it.
+ 
+See README.md for setup, usage, and architecture.
 """
 
 import argparse
