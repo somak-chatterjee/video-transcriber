@@ -216,24 +216,32 @@ def extract_context_lines(metadata: dict = None) -> list:
 def build_scene_context_prompt(metadata: dict) -> str:
     """
     First call of the two-call summary: a narrow, single-purpose prompt
-    that only asks the model to describe the scene/setting/story implied
-    by the video's metadata. Kept deliberately simple - one job, one ask -
-    so a small model isn't juggling this alongside transcript-reading and
-    formatting rules at the same time.
+    that only asks the model to describe the scene/setting implied by the
+    video's metadata.
+
+    Deliberately does NOT invite the model to "recognize" the source and
+    draw on recalled knowledge of it - a small local model's recall of
+    specific movies/shows is unreliable enough that this invitation was
+    observed causing it to confidently substitute a *different, wrong*
+    title and actor even when the correct ones were given verbatim in the
+    metadata. Restricting this to "describe only what's explicitly given"
+    removes that failure mode, at the cost of not adding real plot
+    knowledge the model might have gotten right.
     """
     context_lines = extract_context_lines(metadata)
     context_block = "Here is some information about a video:\n" + "\n".join(context_lines)
 
     return (
         f"{context_block}\n\n"
-        "Describe what this video actually shows: the scene, setting, and story "
-        "implied by the information above - and, if you recognize the specific "
-        "movie, show, or event being referenced, draw on what you actually know "
-        "about it to describe the scene and its place in the larger story. Focus "
-        "on painting a picture of what's happening on screen, not on restating "
-        "the fields above verbatim. If you don't recognize the source material, "
-        "describe only what can reasonably be inferred from the information given "
-        "instead of presenting guesses as certain fact. Write 2-4 sentences.\n\n"
+        "In 2-4 sentences, describe what this video is about, using only the "
+        "information given above. Paraphrase it in your own words rather than "
+        "quoting it verbatim, but do not add any plot details, characters, "
+        "actors, or setting beyond what is explicitly stated or directly implied "
+        "by the title, uploader, description, and tags above. In particular: do "
+        "not name a different movie, show, actor, or year than what is literally "
+        "given above, even if something else seems to come to mind - if the "
+        "information above doesn't give you enough to describe the scene itself, "
+        "just summarize what the title and description say instead of guessing.\n\n"
         "Description:"
     )
 
@@ -241,31 +249,37 @@ def build_scene_context_prompt(metadata: dict) -> str:
 def build_narration_prompt(scene_context: str, text: str) -> str:
     """
     Second call of the two-call summary: given the scene description from
-    the first call, describe what's actually said in the transcript. Also
-    kept to one main job (describe the narration) plus one disambiguation
-    rule (actor vs. character), rather than bundling in formatting and
-    scene-description requirements as well.
+    the first call, describe what's actually said in the transcript.
+
+    The scene description is scoped strictly to identifying who's speaking
+    (name, and whether an actor is voicing a character) - not as a source
+    of additional scene/plot details to narrate. This was added after
+    observing the model otherwise treat the scene description as license
+    to invent props, actions, and dialogue that were never in the
+    transcript at all.
     """
     return (
-        f"Here is a description of a video's scene:\n{scene_context}\n\n"
-        "Below is a speech-to-text transcript of the narration/dialogue spoken "
-        "in that video. It may contain minor transcription errors, filler words, "
-        "or the occasional stray or incorrect word.\n\n"
-        "Describe what the speaker actually says, in your own words, using the "
-        "scene description above as backdrop - connect specific lines or themes "
-        "to what's happening in the scene where relevant, and correct for likely "
-        "transcription errors using that context as a guide. Write this as a "
-        "flowing description, not a bare paraphrase.\n\n"
-        "If the scene description above describes an actor or narrator playing a "
-        "character, identify the speaker in the transcript as that character "
-        "(in-universe), not as the real actor addressing the character - an actor "
-        "playing a role is not having a conversation with that role. Use the "
-        "transcript's own pronouns to check this: first-person language (\"I\", "
-        "\"my\", addressing someone as \"mom\" or similar) means the speaker is "
-        "talking about their own life as that character, not narrating someone "
-        "else's.\n\n"
-        "Do not invent content that isn't actually in the transcript below. Do "
-        "not mention that this is a transcript or that it came from "
+        f"Here is a short description of who appears in a video:\n{scene_context}\n\n"
+        "Below is a speech-to-text transcript of what is actually said in that "
+        "video. It may contain minor transcription errors, filler words, or the "
+        "occasional stray or incorrect word.\n\n"
+        "Describe what the speaker actually says, in your own words, as a "
+        "flowing description rather than a bare paraphrase. Correct for likely "
+        "transcription errors where the meaning is clearly a misheard word.\n\n"
+        "Use the description above ONLY to identify who is speaking - do not "
+        "use it as a source of additional scene details, actions, objects, or "
+        "dialogue to add. Every claim in your description must come from the "
+        "transcript text itself; if something isn't in the transcript below, it "
+        "does not belong in your answer, no matter how well it might seem to "
+        "fit the scene.\n\n"
+        "If the description above says an actor plays a character, treat the "
+        "speaker in the transcript as that character (in-universe), not as the "
+        "real actor addressing the character - an actor playing a role is not "
+        "having a conversation with that role. Use the transcript's own "
+        "pronouns to check this: first-person language (\"I\", \"my\", "
+        "addressing someone as \"mom\" or similar) means the speaker is talking "
+        "about their own life as that character, not narrating someone else's.\n\n"
+        "Do not mention that this is a transcript or that it came from "
         "speech-to-text.\n\n"
         f"Transcript:\n{text}\n\nDescription:"
     )
@@ -282,13 +296,25 @@ def build_plain_summary_prompt(text: str) -> str:
     )
 
 
-def _ollama_generate(prompt: str, model: str, host: str, timeout: float) -> str:
-    """Send one prompt to Ollama's /api/generate and return the response text."""
+def _ollama_generate(prompt: str, model: str, host: str, timeout: float, temperature: float = 0.2) -> str:
+    """
+    Send one prompt to Ollama's /api/generate and return the response text.
+
+    A low default temperature (0.2) biases generation toward more literal,
+    conservative continuations and away from confident improvisation -
+    this reduces (does not eliminate) the model's tendency to invent
+    plausible-sounding but fabricated details when summarizing.
+    """
     import requests
 
     response = requests.post(
         f"{host.rstrip('/')}/api/generate",
-        json={"model": model, "prompt": prompt, "stream": False},
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": temperature},
+        },
         timeout=timeout,
     )
     response.raise_for_status()
@@ -299,7 +325,9 @@ def _ollama_generate(prompt: str, model: str, host: str, timeout: float) -> str:
     return result
 
 
-def summarize_with_ollama(text: str, model: str, host: str, metadata: dict = None, timeout: float = 180.0) -> str:
+def summarize_with_ollama(
+    text: str, model: str, host: str, metadata: dict = None, timeout: float = 180.0, temperature: float = 0.2
+) -> str:
     """
     Summarize transcribed text, optionally grounded in video metadata, via a
     local Ollama server. Requires Ollama to be installed and running
@@ -318,10 +346,10 @@ def summarize_with_ollama(text: str, model: str, host: str, metadata: dict = Non
 
     if not context_lines:
         prompt = build_plain_summary_prompt(text)
-        return _ollama_generate(prompt, model, host, timeout)
+        return _ollama_generate(prompt, model, host, timeout, temperature)
 
-    scene_context = _ollama_generate(build_scene_context_prompt(metadata), model, host, timeout)
-    narration = _ollama_generate(build_narration_prompt(scene_context, text), model, host, timeout)
+    scene_context = _ollama_generate(build_scene_context_prompt(metadata), model, host, timeout, temperature)
+    narration = _ollama_generate(build_narration_prompt(scene_context, text), model, host, timeout, temperature)
 
     return f"## Context\n{scene_context}\n\n## What Was Said\n{narration}"
 
@@ -417,6 +445,7 @@ DEFAULTS = {
     "summary_output": "summary.txt",
     "ollama_model": "llama3.2",
     "ollama_host": "http://localhost:11434",
+    "ollama_temperature": 0.2,
 }
 
 
@@ -553,6 +582,13 @@ def main():
         "--ollama-host",
         default=None,
         help=f"Base URL of the Ollama server (default: {DEFAULTS['ollama_host']})",
+    )
+    parser.add_argument(
+        "--ollama-temperature",
+        type=float,
+        default=None,
+        help="Generation temperature for summarization, 0-1. Lower is more literal/conservative, "
+             f"higher is more creative but more prone to confident fabrication (default: {DEFAULTS['ollama_temperature']})",
     )
     args = parser.parse_args()
     args = apply_config_defaults(args)
@@ -708,7 +744,11 @@ def main():
             print(f"\nGenerating summary via Ollama (model: {args.ollama_model})...")
             try:
                 summary = summarize_with_ollama(
-                    full_text, args.ollama_model, args.ollama_host, metadata=reader.metadata
+                    full_text,
+                    args.ollama_model,
+                    args.ollama_host,
+                    metadata=reader.metadata,
+                    temperature=args.ollama_temperature,
                 )
                 summary_path = Path(args.summary_output)
                 summary_path.write_text(summary + "\n", encoding="utf-8")

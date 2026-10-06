@@ -38,3 +38,4 @@ summarize: true
 summary_output: summary.txt
 ollama_model: llama3.2:1b   # match whatever tag you've actually pulled
 ollama_host: http://localhost:11434
+ollama_temperature: 0.2 

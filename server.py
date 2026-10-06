@@ -22,8 +22,10 @@ was transcribed so far, rather than dying mid-write).
 """
 
 import asyncio
+import os
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +53,7 @@ class Job:
         self.output_lines: list[str] = []
         self.summary_text: Optional[str] = None
         self.subscribers: list[WebSocket] = []
+        self.started_at: float = 0.0
 
     def reset_for_new_run(self, url: str):
         self.process = None
@@ -58,6 +61,7 @@ class Job:
         self.url = url
         self.output_lines = []
         self.summary_text = None
+        self.started_at = time.time()
 
     async def broadcast(self, message: dict):
         dead = []
@@ -82,8 +86,20 @@ class Job:
         else:
             self.status = "done" if returncode == 0 else "error"
 
+        # Make failures explainable: put the exit reason in the log itself,
+        # so an "Error" status is never an empty, mysterious panel.
+        if self.status == "error":
+            if returncode < 0:
+                sig = -returncode
+                hint = " (SIGKILL - commonly the OS killing the process for running out of memory)" if sig == 9 else ""
+                await self.append_line(f"[server] Process was terminated by signal {sig}{hint}.")
+            else:
+                await self.append_line(f"[server] Process exited with error code {returncode}.")
+
+        # Only trust summary.txt if it was written during THIS run - otherwise
+        # a failed run would display a stale summary left over from an earlier one.
         summary_path = BASE_DIR / "summary.txt"
-        if summary_path.exists():
+        if summary_path.exists() and summary_path.stat().st_mtime >= self.started_at:
             try:
                 self.summary_text = summary_path.read_text(encoding="utf-8").strip()
             except Exception:
@@ -126,12 +142,17 @@ async def start_job(req: StartRequest):
 
     job.reset_for_new_run(req.url)
 
-    cmd = [sys.executable, str(SCRIPT_PATH), req.url]
+    # -u / PYTHONUNBUFFERED: when stdout is a pipe, Python block-buffers it,
+    # so output would only arrive in big delayed chunks (or be lost entirely
+    # if the process is killed). Unbuffered makes the dashboard truly live.
+    cmd = [sys.executable, "-u", str(SCRIPT_PATH), req.url]
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         cwd=str(BASE_DIR),
+        env=env,
     )
     job.process = process
     asyncio.create_task(_read_stream(process))

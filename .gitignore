@@ -22,6 +22,10 @@ summary.txt
 # Local config (copy config.example.yaml to config.yaml and edit)
 config.yaml
 
+# Login cookies exported for yt-dlp - these are credentials, never commit them
+cookies.txt
+*cookies*.txt
+
 # OS / editor cruft
 .DS_Store
 .idea/
